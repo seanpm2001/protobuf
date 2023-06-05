@@ -79,6 +79,7 @@ namespace protobuf {
 
 using internal::ReflectionMode;
 using internal::ScopedReflectionMode;
+using internal::SensitiveFieldReporter;
 
 namespace {
 
@@ -135,6 +136,7 @@ std::string Message::DebugString() const {
   printer.SetExpandAny(true);
   printer.SetInsertSilentMarker(internal::enable_debug_text_format_marker.load(
       std::memory_order_relaxed));
+  printer.SetReportSensitiveFields(SensitiveFieldReporter::kDebugString);
 
   printer.PrintToString(*this, &debug_string);
 
@@ -151,6 +153,7 @@ std::string Message::ShortDebugString() const {
   printer.SetExpandAny(true);
   printer.SetInsertSilentMarker(internal::enable_debug_text_format_marker.load(
       std::memory_order_relaxed));
+  printer.SetReportSensitiveFields(SensitiveFieldReporter::kShortDebugString);
 
   printer.PrintToString(*this, &debug_string);
   TrimTrailingSpace(debug_string);
@@ -168,6 +171,7 @@ std::string Message::Utf8DebugString() const {
   printer.SetExpandAny(true);
   printer.SetInsertSilentMarker(internal::enable_debug_text_format_marker.load(
       std::memory_order_relaxed));
+  printer.SetReportSensitiveFields(SensitiveFieldReporter::kUtf8DebugString);
 
   printer.PrintToString(*this, &debug_string);
 
@@ -199,7 +203,8 @@ std::string StringifyMessage(const Message& message, Option option) {
   printer.SetRedactDebugString(
       internal::enable_debug_text_redaction.load(std::memory_order_relaxed));
   printer.SetRandomizeDebugString(true);
-  printer.SetReportSensitiveFields(true);
+  printer.SetReportSensitiveFields(
+      internal::SensitiveFieldReporter::kAbslStringify);
   std::string result;
   printer.PrintToString(message, &result);
 
@@ -2106,7 +2111,7 @@ TextFormat::Printer::Printer()
       insert_silent_marker_(false),
       redact_debug_string_(false),
       randomize_debug_string_(false),
-      report_sensitive_fields_(false),
+      report_sensitive_fields_(internal::SensitiveFieldReporter::kNoReport),
       hide_unknown_fields_(false),
       print_message_fields_in_index_order_(false),
       expand_any_(false),

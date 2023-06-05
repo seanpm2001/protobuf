@@ -73,6 +73,22 @@ PROTOBUF_EXPORT extern std::atomic<bool> enable_debug_text_detection;
 PROTOBUF_EXPORT extern std::atomic<bool> enable_debug_text_redaction;
 PROTOBUF_EXPORT int64_t GetRedactedFieldCount();
 
+// This enum contains all the APIs that convert protos to human-readable
+// formats. A higher-level API must correspond to a greater number than any
+// lower-level APIs it calls under the hood (e.g kDebugString >
+// kPrintToString).
+PROTOBUF_EXPORT enum class SensitiveFieldReporter {
+  kNoReport = 0,
+  kPrintMessage,
+  kPrintWithGenerator,
+  kPrintWithStream,
+  kPrintToString,
+  kAbslStringify,
+  kDebugString,
+  kShortDebugString,
+  kUtf8DebugString
+};
+
 }  // namespace internal
 
 namespace io {
@@ -402,6 +418,14 @@ class PROTOBUF_EXPORT TextFormat {
       truncate_string_field_longer_than_ = truncate_string_field_longer_than;
     }
 
+    // Sets whether sensitive fields found in the message will be reported or
+    // not.
+    void SetReportSensitiveFields(internal::SensitiveFieldReporter reporter) {
+      if (report_sensitive_fields_ < reporter) {
+        report_sensitive_fields_ = reporter;
+      }
+    }
+
     // Register a custom field-specific FastFieldValuePrinter for fields
     // with a particular FieldDescriptor.
     // Returns "true" if the registration succeeded, or "false", if there is
@@ -446,12 +470,6 @@ class PROTOBUF_EXPORT TextFormat {
     // This discourages equality checks based on serialized string comparisons.
     void SetRandomizeDebugString(bool randomize) {
       randomize_debug_string_ = randomize;
-    }
-
-    // Sets whether sensitive fields found in the message will be reported or
-    // not.
-    void SetReportSensitiveFields(bool report) {
-      report_sensitive_fields_ = report;
     }
 
     // Forward declaration of an internal class used to print the text
@@ -525,7 +543,7 @@ class PROTOBUF_EXPORT TextFormat {
     bool insert_silent_marker_;
     bool redact_debug_string_;
     bool randomize_debug_string_;
-    bool report_sensitive_fields_;
+    internal::SensitiveFieldReporter report_sensitive_fields_;
     bool hide_unknown_fields_;
     bool print_message_fields_in_index_order_;
     bool expand_any_;
