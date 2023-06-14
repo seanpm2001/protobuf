@@ -96,7 +96,7 @@ class PROTOBUF_EXPORT DynamicMessageFactory : public MessageFactory {
   //   parser to look for extensions in an alternate pool.  However, note that
   //   this is almost never what you want to do.  Almost all users should use
   //   the zero-arg constructor.
-  DynamicMessageFactory(const DescriptorPool* pool);
+  explicit DynamicMessageFactory(const DescriptorPool* pool);
   DynamicMessageFactory(const DynamicMessageFactory&) = delete;
   DynamicMessageFactory& operator=(const DynamicMessageFactory&) = delete;
 
