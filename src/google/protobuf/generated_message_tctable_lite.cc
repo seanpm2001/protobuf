@@ -1659,7 +1659,8 @@ PROTOBUF_ALWAYS_INLINE const char* TcParser::RepeatedString(
   const auto expected_tag = UnalignedLoad<TagType>(ptr);
   auto& field = RefAt<FieldType>(msg, data.offset());
 
-  const auto validate_last_string = [expected_tag, table, &field] {
+  const auto validate_last_string = [expected_tag,
+                                     table](const std::string& str) {
     switch (utf8) {
       case kNoUtf8:
 #ifdef NDEBUG
@@ -1667,8 +1668,7 @@ PROTOBUF_ALWAYS_INLINE const char* TcParser::RepeatedString(
 #endif
         return true;
       default:
-        if (PROTOBUF_PREDICT_TRUE(
-                utf8_range::IsStructurallyValid(field[field.size() - 1]))) {
+        if (PROTOBUF_PREDICT_TRUE(utf8_range::IsStructurallyValid(str))) {
           return true;
         }
         ReportFastUtf8Error(FastDecodeTag(expected_tag), table);
@@ -1682,12 +1682,16 @@ PROTOBUF_ALWAYS_INLINE const char* TcParser::RepeatedString(
   if (PROTOBUF_PREDICT_TRUE(arena != nullptr &&
                             arena->impl_.GetSerialArenaFast(&serial_arena) &&
                             field.PrepareForParse())) {
+    ScopedFieldAccumulator<void*, RepeatedPtrFieldBase> accumulator(field);
     do {
+      std::string* str;
       ptr += sizeof(TagType);
-      ptr = ParseRepeatedStringOnce(ptr, arena, serial_arena, ctx, field);
+      ptr = ParseRepeatedStringOnce(ptr, serial_arena, ctx, &str);
+      accumulator.Add(str);
 
-      if (PROTOBUF_PREDICT_FALSE(ptr == nullptr || !validate_last_string())) {
-        PROTOBUF_MUSTTAIL return Error(PROTOBUF_TC_PARAM_NO_DATA_PASS);
+      if (PROTOBUF_PREDICT_FALSE(ptr == nullptr ||
+                                 !validate_last_string(*str))) {
+        goto error;
       }
       if (!ctx->DataAvailable(ptr)) break;
     } while (UnalignedLoad<TagType>(ptr) == expected_tag);
@@ -1696,7 +1700,8 @@ PROTOBUF_ALWAYS_INLINE const char* TcParser::RepeatedString(
       ptr += sizeof(TagType);
       std::string* str = field.Add();
       ptr = InlineGreedyStringParser(str, ptr, ctx);
-      if (PROTOBUF_PREDICT_FALSE(ptr == nullptr || !validate_last_string())) {
+      if (PROTOBUF_PREDICT_FALSE(ptr == nullptr ||
+                                 !validate_last_string(*str))) {
         PROTOBUF_MUSTTAIL return Error(PROTOBUF_TC_PARAM_NO_DATA_PASS);
       }
       if (PROTOBUF_PREDICT_FALSE(!ctx->DataAvailable(ptr))) {
@@ -1705,6 +1710,8 @@ PROTOBUF_ALWAYS_INLINE const char* TcParser::RepeatedString(
     } while (UnalignedLoad<TagType>(ptr) == expected_tag);
   }
   PROTOBUF_MUSTTAIL return ToTagDispatch(PROTOBUF_TC_PARAM_NO_DATA_PASS);
+error:
+  PROTOBUF_MUSTTAIL return Error(PROTOBUF_TC_PARAM_NO_DATA_PASS);
 }
 
 PROTOBUF_NOINLINE const char* TcParser::FastBR1(PROTOBUF_TC_PARAM_DECL) {
@@ -2273,13 +2280,12 @@ PROTOBUF_NOINLINE const char* TcParser::MpString(PROTOBUF_TC_PARAM_DECL) {
 }
 
 PROTOBUF_ALWAYS_INLINE const char* TcParser::ParseRepeatedStringOnce(
-    const char* ptr, Arena* arena, SerialArena* serial_arena, ParseContext* ctx,
-    RepeatedPtrField<std::string>& field) {
+    const char* ptr, SerialArena* serial_arena, ParseContext* ctx,
+    std::string** str) {
   int size = ReadSize(&ptr);
   if (PROTOBUF_PREDICT_FALSE(!ptr)) return {};
-  auto* str = Arena::Create<std::string>(arena);
-  field.AddAllocatedForParse(str);
-  ptr = ctx->ReadString(ptr, size, str);
+  *str = new (serial_arena->AllocateFromStringBlock()) std::string();
+  ptr = ctx->ReadString(ptr, size, *str);
   if (PROTOBUF_PREDICT_FALSE(!ptr)) return {};
   PROTOBUF_ASSUME(ptr != nullptr);
   return ptr;
@@ -2300,23 +2306,26 @@ PROTOBUF_NOINLINE const char* TcParser::MpRepeatedString(
   const uint16_t xform_val = type_card & field_layout::kTvMask;
   switch (rep) {
     case field_layout::kRepSString: {
-      auto& field = RefAt<RepeatedPtrField<std::string>>(msg, entry.offset);
+      auto& field = RefAt<RepeatedPtrFieldBase>(msg, entry.offset);
       const char* ptr2 = ptr;
       uint32_t next_tag;
 
       auto* arena = field.GetOwningArena();
       SerialArena* serial_arena;
+      ScopedFieldAccumulator<void*, RepeatedPtrFieldBase> accumulator(field);
       if (PROTOBUF_PREDICT_TRUE(
               arena != nullptr &&
               arena->impl_.GetSerialArenaFast(&serial_arena) &&
               field.PrepareForParse())) {
         do {
           ptr = ptr2;
-          ptr = ParseRepeatedStringOnce(ptr, arena, serial_arena, ctx, field);
-          if (PROTOBUF_PREDICT_FALSE(ptr == nullptr ||
-                                     !MpVerifyUtf8(field[field.size() - 1],
-                                                   table, entry, xform_val))) {
-            PROTOBUF_MUSTTAIL return Error(PROTOBUF_TC_PARAM_NO_DATA_PASS);
+          std::string* str;
+          ptr = ParseRepeatedStringOnce(ptr, serial_arena, ctx, &str);
+          accumulator.Add(str);
+          if (PROTOBUF_PREDICT_FALSE(
+                  ptr == nullptr ||
+                  !MpVerifyUtf8(*str, table, entry, xform_val))) {
+            goto error;
           }
           if (!ctx->DataAvailable(ptr)) break;
           ptr2 = ReadTag(ptr, &next_tag);
@@ -2324,12 +2333,16 @@ PROTOBUF_NOINLINE const char* TcParser::MpRepeatedString(
       } else {
         do {
           ptr = ptr2;
-          std::string* str = field.Add();
+          auto* str = field.TryGetAllocated<StringTypeHandler>();
+          if (str == nullptr) {
+            str = Arena::Create<std::string>(arena);
+          }
           ptr = InlineGreedyStringParser(str, ptr, ctx);
+          accumulator.Add(str);
           if (PROTOBUF_PREDICT_FALSE(
                   ptr == nullptr ||
                   !MpVerifyUtf8(*str, table, entry, xform_val))) {
-            PROTOBUF_MUSTTAIL return Error(PROTOBUF_TC_PARAM_NO_DATA_PASS);
+            goto error;
           }
           if (!ctx->DataAvailable(ptr)) break;
           ptr2 = ReadTag(ptr, &next_tag);
@@ -2347,6 +2360,8 @@ PROTOBUF_NOINLINE const char* TcParser::MpRepeatedString(
   }
 
   PROTOBUF_MUSTTAIL return ToTagDispatch(PROTOBUF_TC_PARAM_NO_DATA_PASS);
+error:
+  PROTOBUF_MUSTTAIL return Error(PROTOBUF_TC_PARAM_NO_DATA_PASS);
 }
 
 
