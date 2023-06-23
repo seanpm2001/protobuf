@@ -430,12 +430,12 @@ class ScopedFieldAccumulator {
     }
   }
 
-  void Add(ElementType v) {
+  PROTOBUF_NODISCARD ElementType& Next() {
     if (ABSL_PREDICT_FALSE(current_size_ == kSize)) {
       field_.MergeFromArray(buffer_, kSize);
       current_size_ = 0;
     }
-    buffer_[current_size_++] = v;
+    return buffer_[current_size_++];
   }
 
  private:
@@ -677,7 +677,7 @@ PROTOBUF_ALWAYS_INLINE const char* TcParser::RepeatedFixed(
   {
     ScopedFieldAccumulator<LayoutType, decltype(field)> accumulator(field);
     do {
-      accumulator.Add(UnalignedLoad<LayoutType>(ptr + sizeof(TagType)));
+      accumulator.Next() = UnalignedLoad<LayoutType>(ptr + sizeof(TagType));
       ptr += sizeof(TagType) + sizeof(LayoutType);
       if (PROTOBUF_PREDICT_FALSE(!ctx->DataAvailable(ptr))) goto parse_loop;
     } while (UnalignedLoad<TagType>(ptr) == tag);
@@ -1022,8 +1022,8 @@ PROTOBUF_ALWAYS_INLINE const char* TcParser::RepeatedVarint(
       ptr += sizeof(TagType);
       FieldType tmp;
       ptr = ParseVarint(ptr, &tmp);
-      if (ptr == nullptr) goto error;
-      accumulator.Add(ZigZagDecodeHelper<FieldType, zigzag>(tmp));
+      if (PROTOBUF_PREDICT_FALSE(ptr == nullptr)) goto error;
+      accumulator.Next() = ZigZagDecodeHelper<FieldType, zigzag>(tmp);
       if (PROTOBUF_PREDICT_FALSE(!ctx->DataAvailable(ptr))) goto parse_loop;
     } while (UnalignedLoad<TagType>(ptr) == expected_tag);
   }
@@ -1104,7 +1104,7 @@ const char* TcParser::PackedVarint(PROTOBUF_TC_PARAM_DECL) {
     } else {
       val = varint;
     }
-    accumulator.Add(val);
+    accumulator.Next() = val;
   });
 }
 
@@ -1246,7 +1246,7 @@ const char* TcParser::RepeatedEnum(PROTOBUF_TC_PARAM_DECL) {
       ptr += sizeof(TagType);
       uint64_t tmp;
       ptr = ParseVarint(ptr, &tmp);
-      if (ptr == nullptr) goto error;
+      if (PROTOBUF_PREDICT_FALSE(ptr == nullptr)) goto error;
       if (PROTOBUF_PREDICT_FALSE(
               !EnumIsValidAux(static_cast<int32_t>(tmp), xform_val, aux))) {
         // We can avoid duplicate work in MiniParse by directly calling
@@ -1254,7 +1254,7 @@ const char* TcParser::RepeatedEnum(PROTOBUF_TC_PARAM_DECL) {
         ptr = ptr2;
         goto unknown_enum_fallback;
       }
-      accumulator.Add(static_cast<int32_t>(tmp));
+      accumulator.Next() = static_cast<int32_t>(tmp);
       if (PROTOBUF_PREDICT_FALSE(!ctx->DataAvailable(ptr))) goto parse_loop;
     } while (UnalignedLoad<TagType>(ptr) == expected_tag);
   }
@@ -1404,7 +1404,7 @@ const char* TcParser::RepeatedEnumSmallRange(PROTOBUF_TC_PARAM_DECL) {
     do {
       uint8_t v = ptr[sizeof(TagType)];
       if (PROTOBUF_PREDICT_FALSE(min > v || v > max)) goto mini_parse;
-      accumulator.Add(static_cast<int32_t>(v));
+      accumulator.Next() = static_cast<int32_t>(v);
       ptr += sizeof(TagType) + 1;
       if (PROTOBUF_PREDICT_FALSE(!ctx->DataAvailable(ptr))) goto parse_loop;
     } while (UnalignedLoad<TagType>(ptr) == expected_tag);
@@ -1702,7 +1702,7 @@ PROTOBUF_ALWAYS_INLINE const char* TcParser::RepeatedString(
       if (PROTOBUF_PREDICT_FALSE(ptr == nullptr || !validate_last_string())) {
         PROTOBUF_MUSTTAIL return Error(PROTOBUF_TC_PARAM_NO_DATA_PASS);
       }
-      if (!ctx->DataAvailable(ptr)) break;
+      if (PROTOBUF_PREDICT_FALSE(!ctx->DataAvailable(ptr))) goto parse_loop;
     } while (UnalignedLoad<TagType>(ptr) == expected_tag);
   } else {
     do {
@@ -1712,12 +1712,12 @@ PROTOBUF_ALWAYS_INLINE const char* TcParser::RepeatedString(
       if (PROTOBUF_PREDICT_FALSE(ptr == nullptr || !validate_last_string())) {
         PROTOBUF_MUSTTAIL return Error(PROTOBUF_TC_PARAM_NO_DATA_PASS);
       }
-      if (PROTOBUF_PREDICT_FALSE(!ctx->DataAvailable(ptr))) {
-        PROTOBUF_MUSTTAIL return ToParseLoop(PROTOBUF_TC_PARAM_NO_DATA_PASS);
-      }
+      if (PROTOBUF_PREDICT_FALSE(!ctx->DataAvailable(ptr))) goto parse_loop;
     } while (UnalignedLoad<TagType>(ptr) == expected_tag);
   }
   PROTOBUF_MUSTTAIL return ToTagDispatch(PROTOBUF_TC_PARAM_NO_DATA_PASS);
+parse_loop:
+  PROTOBUF_MUSTTAIL return ToParseLoop(PROTOBUF_TC_PARAM_NO_DATA_PASS);
 }
 
 PROTOBUF_NOINLINE const char* TcParser::FastBR1(PROTOBUF_TC_PARAM_DECL) {
@@ -1919,10 +1919,11 @@ PROTOBUF_NOINLINE const char* TcParser::MpRepeatedFixed(
     ScopedFieldAccumulator<uint64_t, decltype(field)> accumulator(field);
     do {
       ptr = ptr2;
-      accumulator.Add(UnalignedLoad<uint64_t>(ptr));
+      accumulator.Next() = UnalignedLoad<uint64_t>(ptr);
       ptr += size;
-      if (!ctx->DataAvailable(ptr)) break;
+      if (PROTOBUF_PREDICT_FALSE(!ctx->DataAvailable(ptr))) goto parse_loop;
       ptr2 = ReadTag(ptr, &next_tag);
+      if (PROTOBUF_PREDICT_FALSE(ptr2 == nullptr)) goto error;
     } while (next_tag == decoded_tag);
   } else {
     ABSL_DCHECK_EQ(rep, static_cast<uint16_t>(field_layout::kRep32Bits));
@@ -1936,14 +1937,19 @@ PROTOBUF_NOINLINE const char* TcParser::MpRepeatedFixed(
     ScopedFieldAccumulator<uint32_t, decltype(field)> accumulator(field);
     do {
       ptr = ptr2;
-      accumulator.Add(UnalignedLoad<uint32_t>(ptr));
+      accumulator.Next() = UnalignedLoad<uint32_t>(ptr);
       ptr += size;
-      if (!ctx->DataAvailable(ptr)) break;
+      if (PROTOBUF_PREDICT_FALSE(!ctx->DataAvailable(ptr))) goto parse_loop;
       ptr2 = ReadTag(ptr, &next_tag);
+      if (PROTOBUF_PREDICT_FALSE(ptr2 == nullptr)) goto error;
     } while (next_tag == decoded_tag);
   }
 
   PROTOBUF_MUSTTAIL return ToTagDispatch(PROTOBUF_TC_PARAM_NO_DATA_PASS);
+parse_loop:
+  PROTOBUF_MUSTTAIL return ToParseLoop(PROTOBUF_TC_PARAM_NO_DATA_PASS);
+error:
+  PROTOBUF_MUSTTAIL return Error(PROTOBUF_TC_PARAM_NO_DATA_PASS);
 }
 
 PROTOBUF_NOINLINE const char* TcParser::MpPackedFixed(PROTOBUF_TC_PARAM_DECL) {
@@ -2069,11 +2075,12 @@ PROTOBUF_NOINLINE const char* TcParser::MpRepeatedVarint(
     do {
       uint64_t tmp;
       ptr = ParseVarint(ptr2, &tmp);
-      if (ptr == nullptr) goto error;
-      accumulator.Add(is_zigzag ? WireFormatLite::ZigZagDecode64(tmp) : tmp);
-      if (!ctx->DataAvailable(ptr)) break;
+      if (PROTOBUF_PREDICT_FALSE(ptr == nullptr)) goto error;
+      accumulator.Next() =
+          is_zigzag ? WireFormatLite::ZigZagDecode64(tmp) : tmp;
+      if (PROTOBUF_PREDICT_FALSE(!ctx->DataAvailable(ptr))) goto parse_loop;
       ptr2 = ReadTag(ptr, &next_tag);
-      if (ptr2 == nullptr) goto error;
+      if (PROTOBUF_PREDICT_FALSE(ptr2 == nullptr)) goto error;
     } while (next_tag == decoded_tag);
   } else if (rep == field_layout::kRep32Bits) {
     auto& field = RefAt<RepeatedField<uint32_t>>(msg, entry.offset);
@@ -2083,7 +2090,7 @@ PROTOBUF_NOINLINE const char* TcParser::MpRepeatedVarint(
     do {
       uint64_t tmp;
       ptr = ParseVarint(ptr2, &tmp);
-      if (ptr == nullptr) goto error;
+      if (PROTOBUF_PREDICT_FALSE(ptr == nullptr)) goto error;
       if (is_validated_enum) {
         if (!EnumIsValidAux(tmp, xform_val, *table->field_aux(&entry))) {
           ptr = ptr2;
@@ -2092,10 +2099,10 @@ PROTOBUF_NOINLINE const char* TcParser::MpRepeatedVarint(
       } else if (is_zigzag) {
         tmp = WireFormatLite::ZigZagDecode32(tmp);
       }
-      accumulator.Add(tmp);
-      if (!ctx->DataAvailable(ptr)) break;
+      accumulator.Next() = tmp;
+      if (PROTOBUF_PREDICT_FALSE(!ctx->DataAvailable(ptr))) goto parse_loop;
       ptr2 = ReadTag(ptr, &next_tag);
-      if (ptr2 == nullptr) goto error;
+      if (PROTOBUF_PREDICT_FALSE(ptr2 == nullptr)) goto error;
     } while (next_tag == decoded_tag);
   } else {
     ABSL_DCHECK_EQ(rep, static_cast<uint16_t>(field_layout::kRep8Bits));
@@ -2106,15 +2113,17 @@ PROTOBUF_NOINLINE const char* TcParser::MpRepeatedVarint(
     do {
       uint64_t tmp;
       ptr = ParseVarint(ptr2, &tmp);
-      if (ptr == nullptr) goto error;
-      accumulator.Add(static_cast<bool>(tmp));
-      if (!ctx->DataAvailable(ptr)) break;
+      if (PROTOBUF_PREDICT_FALSE(ptr == nullptr)) goto error;
+      accumulator.Next() = static_cast<bool>(tmp);
+      if (PROTOBUF_PREDICT_FALSE(!ctx->DataAvailable(ptr))) goto parse_loop;
       ptr2 = ReadTag(ptr, &next_tag);
-      if (ptr2 == nullptr) goto error;
+      if (PROTOBUF_PREDICT_FALSE(ptr2 == nullptr)) goto error;
     } while (next_tag == decoded_tag);
   }
 
   PROTOBUF_MUSTTAIL return ToTagDispatch(PROTOBUF_TC_PARAM_NO_DATA_PASS);
+parse_loop:
+  PROTOBUF_MUSTTAIL return ToParseLoop(PROTOBUF_TC_PARAM_NO_DATA_PASS);
 error:
   PROTOBUF_MUSTTAIL return Error(PROTOBUF_TC_PARAM_NO_DATA_PASS);
 unknown_enum_fallback:
@@ -2144,8 +2153,8 @@ PROTOBUF_NOINLINE const char* TcParser::MpPackedVarint(PROTOBUF_TC_PARAM_DECL) {
     ScopedFieldAccumulator<uint64_t, decltype(field)> accumulator(field);
     return ctx->ReadPackedVarint(
         ptr, [&accumulator, is_zigzag](uint64_t value) {
-          accumulator.Add(is_zigzag ? WireFormatLite::ZigZagDecode64(value)
-                                    : value);
+          accumulator.Next() =
+              is_zigzag ? WireFormatLite::ZigZagDecode64(value) : value;
         });
   } else if (rep == field_layout::kRep32Bits) {
     auto& field = RefAt<RepeatedField<uint32_t>>(msg, entry.offset);
@@ -2156,16 +2165,16 @@ PROTOBUF_NOINLINE const char* TcParser::MpPackedVarint(PROTOBUF_TC_PARAM_DECL) {
         if (!EnumIsValidAux(value, xform_val, aux)) {
           AddUnknownEnum(msg, table, data.tag(), value);
         } else {
-          accumulator.Add(value);
+          accumulator.Next() = value;
         }
       });
     } else {
       ScopedFieldAccumulator<uint32_t, decltype(field)> accumulator(field);
       return ctx->ReadPackedVarint(
           ptr, [&accumulator, is_zigzag](uint64_t value) {
-            accumulator.Add(is_zigzag ? WireFormatLite::ZigZagDecode32(
-                                            static_cast<uint32_t>(value))
-                                      : value);
+            accumulator.Next() = is_zigzag ? WireFormatLite::ZigZagDecode32(
+                                                 static_cast<uint32_t>(value))
+                                           : value;
           });
     }
   } else {
@@ -2173,7 +2182,7 @@ PROTOBUF_NOINLINE const char* TcParser::MpPackedVarint(PROTOBUF_TC_PARAM_DECL) {
     auto& field = RefAt<RepeatedField<bool>>(msg, entry.offset);
     ScopedFieldAccumulator<bool, decltype(field)> accumulator(field);
     return ctx->ReadPackedVarint(ptr, [&](uint64_t value) {
-      accumulator.Add(static_cast<bool>(value));
+      accumulator.Next() = static_cast<bool>(value);
     });
   }
 
@@ -2331,7 +2340,7 @@ PROTOBUF_NOINLINE const char* TcParser::MpRepeatedString(
                                                    table, entry, xform_val))) {
             PROTOBUF_MUSTTAIL return Error(PROTOBUF_TC_PARAM_NO_DATA_PASS);
           }
-          if (!ctx->DataAvailable(ptr)) break;
+          if (PROTOBUF_PREDICT_FALSE(!ctx->DataAvailable(ptr))) goto parse_loop;
           ptr2 = ReadTag(ptr, &next_tag);
         } while (next_tag == decoded_tag);
       } else {
@@ -2344,7 +2353,7 @@ PROTOBUF_NOINLINE const char* TcParser::MpRepeatedString(
                   !MpVerifyUtf8(*str, table, entry, xform_val))) {
             PROTOBUF_MUSTTAIL return Error(PROTOBUF_TC_PARAM_NO_DATA_PASS);
           }
-          if (!ctx->DataAvailable(ptr)) break;
+          if (PROTOBUF_PREDICT_FALSE(!ctx->DataAvailable(ptr))) goto parse_loop;
           ptr2 = ReadTag(ptr, &next_tag);
         } while (next_tag == decoded_tag);
       }
@@ -2360,6 +2369,8 @@ PROTOBUF_NOINLINE const char* TcParser::MpRepeatedString(
   }
 
   PROTOBUF_MUSTTAIL return ToTagDispatch(PROTOBUF_TC_PARAM_NO_DATA_PASS);
+parse_loop:
+  PROTOBUF_MUSTTAIL return ToParseLoop(PROTOBUF_TC_PARAM_NO_DATA_PASS);
 }
 
 
@@ -2470,7 +2481,6 @@ const char* TcParser::MpRepeatedMessageOrGroup(PROTOBUF_TC_PARAM_DECL) {
     }
   }
 
-  SyncHasbits(msg, hasbits, table);
   auto& field = RefAt<RepeatedPtrFieldBase>(msg, entry.offset);
   const auto aux = *table->field_aux(&entry);
   if ((type_card & field_layout::kTvMask) == field_layout::kTvTable) {
@@ -2484,10 +2494,10 @@ const char* TcParser::MpRepeatedMessageOrGroup(PROTOBUF_TC_PARAM_DECL) {
       ptr = is_group ? ctx->ParseGroup<TcParser>(value, ptr2, decoded_tag,
                                                  inner_table)
                      : ctx->ParseMessage<TcParser>(value, ptr2, inner_table);
-      if (ptr == nullptr) goto error;
-      if (!ctx->DataAvailable(ptr)) goto parse_loop;
+      if (PROTOBUF_PREDICT_FALSE(ptr == nullptr)) goto error;
+      if (PROTOBUF_PREDICT_FALSE(!ctx->DataAvailable(ptr))) goto parse_loop;
       ptr2 = ReadTag(ptr, &next_tag);
-      if (ptr2 == nullptr) goto error;
+      if (PROTOBUF_PREDICT_FALSE(ptr2 == nullptr)) goto error;
     } while (next_tag == decoded_tag);
   } else {
     const MessageLite* default_instance;
@@ -2505,10 +2515,10 @@ const char* TcParser::MpRepeatedMessageOrGroup(PROTOBUF_TC_PARAM_DECL) {
           field.Add<GenericTypeHandler<MessageLite>>(default_instance);
       ptr = is_group ? ctx->ParseGroup(value, ptr2, decoded_tag)
                      : ctx->ParseMessage(value, ptr2);
-      if (ptr == nullptr) goto error;
-      if (!ctx->DataAvailable(ptr)) goto parse_loop;
+      if (PROTOBUF_PREDICT_FALSE(ptr == nullptr)) goto error;
+      if (PROTOBUF_PREDICT_FALSE(!ctx->DataAvailable(ptr))) goto parse_loop;
       ptr2 = ReadTag(ptr, &next_tag);
-      if (ptr2 == nullptr) goto error;
+      if (PROTOBUF_PREDICT_FALSE(ptr2 == nullptr)) goto error;
     } while (next_tag == decoded_tag);
   }
   PROTOBUF_MUSTTAIL return ToTagDispatch(PROTOBUF_TC_PARAM_NO_DATA_PASS);
